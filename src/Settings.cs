@@ -47,12 +47,19 @@ public sealed class AudioTrack
     };
 }
 
+public enum RateControl { CBR, VBR, CQP }
+public enum EncoderPreset { Speed, Balanced, Quality }
+
 public sealed class Settings
 {
     public int BufferSeconds { get; set; } = 120;
     public int Height { get; set; } = 1080;
-    public int Fps { get; set; } = 60;
-    public int BitrateMbps { get; set; } = 15;
+    public int Fps { get; set; } = 60;                // 0 = match the game
+    public RateControl RateControl { get; set; } = RateControl.CBR;
+    public int BitrateMbps { get; set; } = 15;        // CBR, VBR target
+    public int MaxBitrateMbps { get; set; } = 30;     // VBR peak
+    public int Cqp { get; set; } = 20;                // CQP level, lower = better
+    public EncoderPreset Preset { get; set; } = EncoderPreset.Balanced;
     public int Monitor { get; set; } = 0;
     public bool GameWindowOnly { get; set; } = true;  // record just the game's window while it runs
     public bool BufferOnDisk { get; set; } = false;   // false = RAM

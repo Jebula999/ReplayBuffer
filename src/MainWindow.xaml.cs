@@ -15,7 +15,8 @@ namespace ReplayBuffer;
 public partial class MainWindow : Window
 {
     static readonly (string Label, int Height)[] Resolutions = { ("720p", 720), ("1080p", 1080), ("1440p", 1440) };
-    static readonly int[] FrameRates = { 30, 60, 144 };
+    static readonly int[] FrameRates = { 0, 30, 60, 144 };  // 0 = match the game
+    static readonly int[] CqpLevels = { 14, 16, 18, 20, 22, 23, 24, 26, 28, 30, 33, 36 };
     static readonly int[] Bitrates = { 5, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100 };
     static readonly (string Label, int Seconds)[] Buffers =
     {
@@ -81,10 +82,18 @@ public partial class MainWindow : Window
     {
         foreach (var r in Resolutions) ResolutionBox.Items.Add(r.Label);
         ResolutionBox.SelectedIndex = Math.Max(0, Array.FindIndex(Resolutions, r => r.Height == S.Height));
-        foreach (int f in FrameRates) FpsBox.Items.Add($"{f} fps");
+        foreach (int f in FrameRates) FpsBox.Items.Add(f == 0 ? "Match game" : $"{f} fps");
         FpsBox.SelectedIndex = Math.Max(0, Array.IndexOf(FrameRates, S.Fps));
         foreach (int b in Bitrates) BitrateBox.Items.Add(b == 15 ? "15 Mbps (default)" : $"{b} Mbps");
         BitrateBox.SelectedIndex = Math.Max(0, Array.IndexOf(Bitrates, S.BitrateMbps));
+        foreach (int b in Bitrates) MaxBitrateBox.Items.Add($"{b} Mbps");
+        MaxBitrateBox.SelectedIndex = Math.Max(0, Array.IndexOf(Bitrates, S.MaxBitrateMbps));
+        foreach (int q in CqpLevels) CqpBox.Items.Add(q switch { 14 => "14 (near lossless)", 20 => "20 (default)", 30 => "30 (small files)", _ => q.ToString() });
+        CqpBox.SelectedIndex = Math.Max(0, Array.IndexOf(CqpLevels, S.Cqp));
+        RateBox.SelectedIndex = (int)S.RateControl;
+        PresetBox.SelectedIndex = (int)S.Preset;
+        AboutTitle.Text = $"Replay Buffer {typeof(App).Assembly.GetName().Version?.ToString(3)}";
+        RefreshRateRows();
         foreach (var b in Buffers) BufferBox.Items.Add(b.Label);
         BufferBox.SelectedIndex = Math.Max(0, Array.FindIndex(Buffers, b => b.Seconds == S.BufferSeconds));
         StorageBox.SelectedIndex = S.BufferOnDisk ? 1 : 0;
@@ -112,17 +121,48 @@ public partial class MainWindow : Window
         RefreshEstimate();
     }
 
-    // constant bitrate, so size depends only on bitrate, track count and length
+    void RefreshRateRows()
+    {
+        BitratePanel.Visibility = S.RateControl == RateControl.CQP ? Visibility.Collapsed : Visibility.Visible;
+        MaxBitratePanel.Visibility = S.RateControl == RateControl.VBR ? Visibility.Visible : Visibility.Collapsed;
+        CqpPanel.Visibility = S.RateControl == RateControl.CQP ? Visibility.Visible : Visibility.Collapsed;
+        BitrateTitle.Text = S.RateControl == RateControl.VBR ? "Target bitrate" : "Bitrate";
+        RateDesc.Text = S.RateControl switch
+        {
+            RateControl.VBR => "Uses less in quiet scenes and up to the max in busy ones",
+            RateControl.CQP => "Same quality all the time: tiny files when little moves, big ones in action",
+            _ => "Same bitrate all the time, so file sizes are predictable",
+        };
+    }
+
+    // CBR/VBR: size follows the bitrate. CQP: rough guess from pixels per second, varies a lot with the game.
     void RefreshEstimate()
     {
         int tracks = S.Tracks.Count;
-        double audio = tracks * 160_000 + (tracks > 1 ? 192_000 : 0);                   // bits/s in the clip
-        double clip = (S.BitrateMbps * 1e6 + audio) / 8 * S.BufferSeconds * 1.01;        // MP4 overhead
-        double ram = (S.BitrateMbps * 1e6 + tracks * 160_000) / 8 * (S.BufferSeconds + 4) * 1.06;  // MPEG-TS overhead
-        EstimateClip.Text = "≈ " + Size(clip) + " per clip";
-        EstimateRam.Text = Size(ram) + (S.BufferOnDisk ? " of temp disk space" : " of memory") + " while buffering";
+        bool cqp = S.RateControl == RateControl.CQP;
+        double video = cqp
+            ? S.Height * S.Height * 16 / 9.0 * (S.Fps == 0 ? 60 : S.Fps) * 0.12 * Math.Pow(2, (20 - S.Cqp) / 6.0)
+            : S.BitrateMbps * 1e6;
+        double audio = tracks * 160_000 + (tracks > 1 ? 192_000 : 0);             // bits/s in the clip
+        double clip = (video + audio) / 8 * S.BufferSeconds * 1.01;                // MP4 overhead
+        double ram = (video + tracks * 160_000) / 8 * (S.BufferSeconds + 4) * 1.06;  // MPEG-TS overhead
+        string up = S.RateControl == RateControl.VBR ? "up to " : "";
+        if (S.RateControl == RateControl.VBR)
+        {
+            double peak = Math.Max(S.BitrateMbps, S.MaxBitrateMbps) * 1e6;
+            clip = (peak + audio) / 8 * S.BufferSeconds * 1.01;
+            ram = (peak + tracks * 160_000) / 8 * (S.BufferSeconds + 4) * 1.06;
+        }
+        EstimateClip.Text = (cqp ? "roughly " : up == "" ? "≈ " : up) + Size(clip) + " per clip";
+        EstimateRam.Text = up + Size(ram) + (S.BufferOnDisk ? " of temp disk space" : " of memory") + " while buffering";
         string len = Buffers.FirstOrDefault(b => b.Seconds == S.BufferSeconds).Label ?? $"{S.BufferSeconds} s";
-        EstimateDetail.Text = $"{len} at {S.BitrateMbps} Mbps with {tracks} audio track{(tracks == 1 ? "" : "s")}. Resolution and frame rate don't change it.";
+        string with = $"with {tracks} audio track{(tracks == 1 ? "" : "s")}";
+        EstimateDetail.Text = S.RateControl switch
+        {
+            RateControl.CQP => $"{len} at CQ {S.Cqp} {with}. Depends on the game: busy scenes are bigger, still ones much smaller.",
+            RateControl.VBR => $"{len} at {S.BitrateMbps}-{Math.Max(S.BitrateMbps, S.MaxBitrateMbps)} Mbps {with}. Usually less than the maximum.",
+            _ => $"{len} at {S.BitrateMbps} Mbps {with}. Resolution and frame rate don't change it.",
+        };
     }
 
     static string Size(double bytes) => bytes >= 1e9 ? $"{bytes / 1e9:0.0} GB" : $"{bytes / 1e6:0} MB";
@@ -158,6 +198,8 @@ public partial class MainWindow : Window
     // ---------------- header ----------------
 
     void Toggle_Click(object sender, RoutedEventArgs e) => app.ToggleBuffer();
+    void GitHub_Click(object sender, RoutedEventArgs e) =>
+        Process.Start(new ProcessStartInfo("https://github.com/Jebula999/ReplayBuffer") { UseShellExecute = true });
     void Save_Click(object sender, RoutedEventArgs e) => app.SaveClip();
 
     // ---------------- video / replay ----------------
@@ -168,6 +210,11 @@ public partial class MainWindow : Window
         S.Height = Resolutions[ResolutionBox.SelectedIndex].Height;
         S.Fps = FrameRates[FpsBox.SelectedIndex];
         S.BitrateMbps = Bitrates[BitrateBox.SelectedIndex];
+        S.MaxBitrateMbps = Bitrates[MaxBitrateBox.SelectedIndex];
+        S.Cqp = CqpLevels[CqpBox.SelectedIndex];
+        S.RateControl = (RateControl)RateBox.SelectedIndex;
+        S.Preset = (EncoderPreset)PresetBox.SelectedIndex;
+        RefreshRateRows();
         S.Monitor = MonitorBox.SelectedIndex;
         S.BufferSeconds = Buffers[BufferBox.SelectedIndex].Seconds;
         S.BufferOnDisk = StorageBox.SelectedIndex == 1;

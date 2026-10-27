@@ -20,7 +20,7 @@ using Microsoft.Win32;
 
 static class Setup
 {
-    public const string Version = "1.0.0";
+    public const string Version = "1.1.0";
     const string Name = "Replay Buffer";
     const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\ReplayBuffer";
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";

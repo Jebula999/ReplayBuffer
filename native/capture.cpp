@@ -1,6 +1,7 @@
 ﻿// capture.exe --list
 //   prints one line per monitor: "index<TAB>width<TAB>height<TAB>name" (index = --monitor value)
 // capture.exe --monitor N --height H --fps F --kbps K --start QPC [--pipe NAME] [--window a.exe;b.exe]
+//             [--rc cbr|vbr|cqp] [--maxkbps K] [--qp 0-51] [--quality 0-100]   (--fps 0 = match the game)
 //   GPU-only screen recorder: Desktop Duplication -> D3D11 video processor (BGRA->NV12 + scale)
 //   -> hardware H.264 encoder MFT. Writes H.264 in an IVF container (exact frame timestamps on the
 //   shared QPC clock) to the named pipe, or to stdout without --pipe.
@@ -10,6 +11,8 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include <dwmapi.h>
+#include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <string>
 #include <winrt/Windows.Foundation.h>
@@ -75,6 +78,9 @@ static const int POOL = 8;
 
 struct Capture {
     int monitor = 0, outH = 1080, outW = 1920, fps = 60, kbps = 20000;
+    int rc = 0, maxKbps = 0, qp = 20, quality = -1;  // rc: 0 CBR, 1 VBR, 2 CQP; quality: 0 speed .. 100 quality
+    bool matchRate = false;  // --fps 0: encode each new frame as it arrives (variable frame rate)
+    int tb = 60;             // timestamp units per second
     LONGLONG startQpc = 0;  // shared epoch with the audio writers (QueryPerformanceCounter ticks)
 
     ComPtr<IDXGIAdapter1> adapter;
@@ -100,6 +106,7 @@ struct Capture {
     DWORD outBufSize = 0;
     std::vector<BYTE> seqHeader;
     int needInput = 0;
+    ComPtr<ICodecAPI> codec;
 
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
 
@@ -167,6 +174,8 @@ struct Capture {
     HWND gameWnd = nullptr;
     bool windowMode = false;  // a listed game is running: record its window, never the desktop
     double nextFind = 0;
+    HANDLE frameEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);  // signalled when the game presents a frame
+    bool fresh = false;                                               // last grab() got a new image
 
     bool exeMatches(const wchar_t* path) {
         const wchar_t* base = wcsrchr(path, L'\\');
@@ -243,6 +252,7 @@ struct Capture {
             try { session.IsCursorCaptureEnabled(false); } catch (...) {}
             try { session.IsBorderRequired(false); } catch (...) {}
             item.Closed([this](auto&&, auto&&) { itemClosed = true; });
+            framePool.FrameArrived([this](auto&&, auto&&) { SetEvent(frameEvt); });
             session.StartCapture();
             fprintf(stderr, "capture: recording game window \"%ls\" (%dx%d)\n", title, poolSize.Width, poolSize.Height);
         } catch (winrt::hresult_error const& e) {
@@ -260,7 +270,7 @@ struct Capture {
     }
 
     // returns false when the desktop should be recorded instead
-    bool grabWindow() {
+    bool grabWindow(DWORD waitMs) {
         if (windowExes.empty() || !wrtDev) return false;
         double t = now();
         if (itemClosed.exchange(false)) {
@@ -290,7 +300,11 @@ struct Capture {
             }
         }
         if (!windowMode) return false;
-        if (!session) return true;
+        if (!session) {
+            if (waitMs) Sleep(waitMs);
+            return true;
+        }
+        if (waitMs) WaitForSingleObject(frameEvt, waitMs);
 
         wgc::Direct3D11CaptureFrame frame{nullptr};
         try {
@@ -313,6 +327,7 @@ struct Capture {
                 if (w != srcW || h != srcH) createSourceChain(w, h);
                 D3D11_BOX box = {0, 0, 0, w, h, 1};
                 ctx->CopySubresourceRegion(src.Get(), 0, 0, 0, 0, tex.Get(), 0, &box);
+                fresh = true;
             }
         }
         frame.Close();
@@ -428,12 +443,17 @@ struct Capture {
     }
 
     // copies the newest desktop image into src; keeps the previous one if nothing changed
-    void grab() {
-        if (grabWindow()) return;
-        if (!dup && !startDuplication()) return;
+    // waitMs: how long to wait for a new image (match-game mode)
+    void grab(DWORD waitMs = 0) {
+        fresh = false;
+        if (grabWindow(waitMs)) return;
+        if (!dup && !startDuplication()) {
+            if (waitMs) Sleep(waitMs);
+            return;
+        }
         DXGI_OUTDUPL_FRAME_INFO info;
         ComPtr<IDXGIResource> res;
-        HRESULT hr = dup->AcquireNextFrame(0, &info, &res);
+        HRESULT hr = dup->AcquireNextFrame(waitMs, &info, &res);
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) return;
         if (FAILED(hr)) {  // access lost: mode change, UAC, fullscreen switch
             if (hr != DXGI_ERROR_ACCESS_LOST) {
@@ -448,7 +468,10 @@ struct Capture {
             if (SUCCEEDED(res.As(&tex))) {
                 D3D11_TEXTURE2D_DESC d;
                 tex->GetDesc(&d);
-                if (d.Width == srcW && d.Height == srcH) ctx->CopyResource(src.Get(), tex.Get());
+                if (d.Width == srcW && d.Height == srcH) {
+                    ctx->CopyResource(src.Get(), tex.Get());
+                    fresh = true;
+                }
             }
         }
         dup->ReleaseFrame();
@@ -508,14 +531,49 @@ struct Capture {
         TRY(mgr->ResetDevice(dev.Get(), token));
         TRY(mft->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, reinterpret_cast<ULONG_PTR>(mgr.Get())));
 
-        ComPtr<ICodecAPI> codec;
+        codec.Reset();
         if (SUCCEEDED(mft.As(&codec))) {
             VARIANT v;
             v.vt = VT_UI4;
-            v.ulVal = eAVEncCommonRateControlMode_CBR;
-            codec->SetValue(&CODECAPI_AVEncCommonRateControlMode, &v);
-            v.ulVal = kbps * 1000;
-            codec->SetValue(&CODECAPI_AVEncCommonMeanBitRate, &v);
+            const char* mode = "CBR";
+            if (rc == 2) {  // constant QP
+                v.ulVal = eAVEncCommonRateControlMode_Quality;
+                if (SUCCEEDED(codec->SetValue(&CODECAPI_AVEncCommonRateControlMode, &v))) {
+                    VARIANT q;
+                    q.vt = VT_UI8;
+                    q.ullVal = ULONGLONG(qp);
+                    bool ok = SUCCEEDED(codec->SetValue(&CODECAPI_AVEncVideoEncodeQP, &q));
+                    q.ullVal = ULONGLONG(qp) | ULONGLONG(qp) << 16 | ULONGLONG(qp) << 32;  // I, P, B
+                    ok |= SUCCEEDED(codec->SetValue(&CODECAPI_AVEncVideoEncodeFrameTypeQP, &q));
+                    v.ulVal = ULONG((51 - qp) * 100 / 51);  // for encoders that only take a 0-100 quality
+                    ok |= SUCCEEDED(codec->SetValue(&CODECAPI_AVEncCommonQuality, &v));
+                    if (ok) mode = "CQP";
+                }
+                if (strcmp(mode, "CQP")) rc = 1;  // unsupported: fall back to VBR
+            }
+            if (rc == 1) {
+                v.ulVal = eAVEncCommonRateControlMode_PeakConstrainedVBR;
+                if (SUCCEEDED(codec->SetValue(&CODECAPI_AVEncCommonRateControlMode, &v))) {
+                    mode = "VBR";
+                    v.ulVal = std::max(maxKbps, kbps) * 1000;
+                    codec->SetValue(&CODECAPI_AVEncCommonMaxBitRate, &v);
+                } else rc = 0;
+            }
+            if (rc == 0) {
+                v.ulVal = eAVEncCommonRateControlMode_CBR;
+                codec->SetValue(&CODECAPI_AVEncCommonRateControlMode, &v);
+            }
+            if (rc != 2) {
+                v.ulVal = kbps * 1000;
+                codec->SetValue(&CODECAPI_AVEncCommonMeanBitRate, &v);
+            }
+            if (quality >= 0) {
+                v.ulVal = ULONG(quality);
+                codec->SetValue(&CODECAPI_AVEncCommonQualityVsSpeed, &v);
+            }
+            if (rc == 2) fprintf(stderr, "capture: rate control CQP %d\n", qp);
+            else fprintf(stderr, "capture: rate control %s %d kbps%s\n", mode, kbps,
+                         rc == 1 ? (" (max " + std::to_string(std::max(maxKbps, kbps)) + ")").c_str() : "");
             v.ulVal = fps * 2;  // keyframe every 2 s = buffer segment length
             codec->SetValue(&CODECAPI_AVEncMPVGOPSize, &v);
             v.ulVal = 0;
@@ -527,7 +585,7 @@ struct Capture {
         CHK(MFCreateMediaType(&ot));
         ot->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
         ot->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
-        ot->SetUINT32(MF_MT_AVG_BITRATE, kbps * 1000);
+        if (rc != 2) ot->SetUINT32(MF_MT_AVG_BITRATE, kbps * 1000);
         MFSetAttributeSize(ot.Get(), MF_MT_FRAME_SIZE, outW, outH);
         MFSetAttributeRatio(ot.Get(), MF_MT_FRAME_RATE, fps, 1);
         MFSetAttributeRatio(ot.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
@@ -565,12 +623,12 @@ struct Capture {
     }
 
     // IVF container: 32-byte file header, then per frame [u32 size][u64 pts] + data.
-    // Carries exact frame timestamps (pts = frame index since the shared epoch, timebase 1/fps).
+    // Carries exact frame timestamps (pts since the shared epoch, timebase 1/tb).
     void writeIvfHeader() {
         BYTE h[32] = {'D', 'K', 'I', 'F', 0, 0, 32, 0, 'H', '2', '6', '4'};
         *(UINT16*)(h + 12) = UINT16(outW);
         *(UINT16*)(h + 14) = UINT16(outH);
-        *(UINT32*)(h + 16) = UINT32(fps);  // timebase denominator
+        *(UINT32*)(h + 16) = UINT32(tb);   // timebase denominator
         *(UINT32*)(h + 20) = 1;            // timebase numerator
         write(h, 32);
     }
@@ -659,7 +717,7 @@ struct Capture {
                 ob.pSample->GetSampleTime(&t);
                 bool addHeader = key && !seqHeader.empty() && !hasSps(p, len);
                 writeIvfFrame(addHeader ? seqHeader.data() : nullptr, addHeader ? DWORD(seqHeader.size()) : 0,
-                              p, len, (t * fps + 5000000) / 10000000);
+                              p, len, (t * tb + 5000000) / 10000000);
                 buf->Unlock();
             }
         }
@@ -685,7 +743,7 @@ struct Capture {
     }
 
     double* waitStat = nullptr;
-    void encode(int slot, LONGLONG tick) {
+    void encode(int slot, LONGLONG pts, bool forceKey = false) {
         double w0 = now();
         while (needInput == 0) pump(true);
         if (waitStat) *waitStat += now() - w0;
@@ -697,8 +755,14 @@ struct Capture {
         ComPtr<IMFSample> s;
         CHK(MFCreateSample(&s));
         s->AddBuffer(buf.Get());
-        s->SetSampleTime(tick * 10000000LL / fps);
+        s->SetSampleTime(pts * 10000000LL / tb);
         s->SetSampleDuration(10000000LL / fps);
+        if (forceKey && codec) {
+            VARIANT v;
+            v.vt = VT_UI4;
+            v.ulVal = 1;
+            codec->SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &v);
+        }
         HRESULT hr = mft->ProcessInput(0, s.Get(), 0);
         if (FAILED(hr)) die("ProcessInput", hr);
         needInput--;
@@ -714,9 +778,17 @@ struct Capture {
         if (outH <= 0 || outH > int(nh)) outH = nh;
         outW = int((double(nw) * outH / nh) + 1) & ~1;
         outH &= ~1;
+        if (matchRate) {  // the game can't show more frames than the display refreshes; used as the encoder's rate hint
+            DEVMODEW dm = {};
+            dm.dmSize = sizeof(dm);
+            fps = EnumDisplaySettingsW(od.DeviceName, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1
+                      ? std::clamp(int(dm.dmDisplayFrequency), 30, 500) : 60;
+            tb = 90000;
+            fprintf(stderr, "capture: matching the game's frame rate (up to %d fps)\n", fps);
+        } else tb = fps;
         createSourceChain(nw, nh);
         clearSource();
-        if (!grabWindow()) startDuplication();
+        if (!grabWindow(0)) startDuplication();
         setupEncoder();
         std::thread(&Capture::writerLoop, this).detach();
         writeIvfHeader();
@@ -734,6 +806,74 @@ struct Capture {
         double statT = now(), waitEnc = 0;
         LONGLONG statF = 0, statS = 0;
         waitStat = &waitEnc;
+        auto report = [&] {
+            if (now() - statT < 5) return;
+            // report straight away when frames drop, otherwise once a minute
+            double secs = now() - statT;
+            static int quiet = 0;
+            if (skipped > statS || ++quiet >= 12) {
+                quiet = 0;
+                fprintf(stderr, "capture: %.1f fps encoded, %.1f fps dropped (fell behind), %.0f%% waiting on encoder\n",
+                        (frame - statF) / secs, (skipped - statS) / secs, 100 * waitEnc / secs);
+                fflush(stderr);
+            }
+            statT = now();
+            statF = frame;
+            statS = skipped;
+            waitEnc = 0;
+        };
+        auto encodeSrc = [&](LONGLONG pts, bool key) {
+            int slot = int(frame % POOL);
+            D3D11_VIDEO_PROCESSOR_STREAM st = {};
+            st.Enable = TRUE;
+            st.pInputSurface = inView.Get();
+            vctx->VideoProcessorBlt(vp.Get(), outView[slot].Get(), 0, 1, &st);
+            encode(slot, pts, key);
+            frame++;
+            while (pump(false)) {}
+            report();
+        };
+        if (matchRate) {
+            // each new image is encoded when it arrives, stamped with its arrival time. A still screen is
+            // repeated 10x a second, and a keyframe is forced every 2 s to keep buffer chunks short.
+            while (now() < t0) Sleep(1);
+            double last = -1, lastKey = -10;
+            LONGLONG lastPts = -1;
+            // the encoder budgets bits per frame from the refresh rate, so CBR/VBR bitrates are rescaled
+            // by refresh / measured fps to land on the chosen bitrate
+            double rateT = now(), scale = 1;
+            LONGLONG rateF = 0;
+            for (;;) {
+                if (rc != 2 && codec && now() - rateT >= 1) {
+                    double actual = (frame - rateF) / (now() - rateT);
+                    double s = std::clamp(fps / std::max(actual, 1.0), 1.0, 30.0);
+                    if (std::abs(s - scale) > scale * 0.1) {
+                        scale = s;
+                        VARIANT v;
+                        v.vt = VT_UI4;
+                        v.ulVal = ULONG(kbps * 1000.0 * scale);
+                        codec->SetValue(&CODECAPI_AVEncCommonMeanBitRate, &v);
+                        if (rc == 1) {
+                            v.ulVal = ULONG(std::max(maxKbps, kbps) * 1000.0 * scale);
+                            codec->SetValue(&CODECAPI_AVEncCommonMaxBitRate, &v);
+                        }
+                    }
+                    rateT = now();
+                    rateF = frame;
+                }
+                double idle = last < 0 ? 0 : last + 0.1 - now();
+                grab(idle > 0 ? DWORD(idle * 1000) + 1 : 0);
+                double t = now();
+                if (!fresh && last >= 0 && t - last < 0.1) continue;
+                LONGLONG pts = LONGLONG((t - t0) * tb);
+                if (pts <= lastPts) continue;
+                bool key = t - lastKey >= 2;
+                if (key) lastKey = t;
+                encodeSrc(pts, key);
+                last = t;
+                lastPts = pts;
+            }
+        }
         for (;;) {
             double wait = t0 + tick * period - now();
             if (wait > 0.0005) {
@@ -747,30 +887,8 @@ struct Capture {
                 tick = cur;
             }
             grab();
-            int slot = int(frame % POOL);
-            D3D11_VIDEO_PROCESSOR_STREAM st = {};
-            st.Enable = TRUE;
-            st.pInputSurface = inView.Get();
-            vctx->VideoProcessorBlt(vp.Get(), outView[slot].Get(), 0, 1, &st);
-            encode(slot, tick);
-            frame++;
+            encodeSrc(tick, false);
             tick++;
-            while (pump(false)) {}
-            if (now() - statT >= 5) {
-                // report straight away when frames drop, otherwise once a minute
-                double secs = now() - statT;
-                static int quiet = 0;
-                if (skipped > statS || ++quiet >= 12) {
-                    quiet = 0;
-                    fprintf(stderr, "capture: %.1f fps encoded, %.1f fps dropped (fell behind), %.0f%% waiting on encoder\n",
-                            (frame - statF) / secs, (skipped - statS) / secs, 100 * waitEnc / secs);
-                    fflush(stderr);
-                }
-                statT = now();
-                statF = frame;
-                statS = skipped;
-                waitEnc = 0;
-            }
         }
     }
 };
@@ -805,6 +923,10 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--height")) c.outH = atoi(argv[i + 1]);
         else if (!strcmp(argv[i], "--fps")) c.fps = atoi(argv[i + 1]);
         else if (!strcmp(argv[i], "--kbps")) c.kbps = atoi(argv[i + 1]);
+        else if (!strcmp(argv[i], "--maxkbps")) c.maxKbps = atoi(argv[i + 1]);
+        else if (!strcmp(argv[i], "--qp")) c.qp = std::clamp(atoi(argv[i + 1]), 0, 51);
+        else if (!strcmp(argv[i], "--quality")) c.quality = std::clamp(atoi(argv[i + 1]), 0, 100);
+        else if (!strcmp(argv[i], "--rc")) c.rc = !strcmp(argv[i + 1], "cqp") ? 2 : !strcmp(argv[i + 1], "vbr") ? 1 : 0;
         else if (!strcmp(argv[i], "--start")) c.startQpc = _strtoi64(argv[i + 1], nullptr, 10);
         else if (!strcmp(argv[i], "--window")) {
             for (char* tok = strtok(argv[i + 1], ";"); tok; tok = strtok(nullptr, ";")) {
@@ -822,6 +944,7 @@ int main(int argc, char** argv) {
         if (!ConnectNamedPipe(c.out, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED)
             die("ConnectNamedPipe", HRESULT_FROM_WIN32(GetLastError()));
     }
+    if (c.fps <= 0) c.matchRate = true;
     c.run();
     return 0;
 }

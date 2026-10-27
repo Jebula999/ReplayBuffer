@@ -113,6 +113,8 @@ public sealed class Recorder
             string videoPipe = $@"\\.\pipe\{id}_video";
             var capArgs = new List<string> { "--pipe", videoPipe, "--monitor", s.Monitor.ToString(), "--height", s.Height.ToString(),
                     "--fps", s.Fps.ToString(), "--kbps", kbps.ToString(), "--start", epoch.ToString() };
+            capArgs.AddRange(new[] { "--rc", s.RateControl.ToString().ToLowerInvariant(), "--maxkbps", (s.MaxBitrateMbps * 1000).ToString(),
+                    "--qp", s.Cqp.ToString(), "--quality", s.Preset switch { EncoderPreset.Speed => "0", EncoderPreset.Quality => "100", _ => "50" } });
             if (s.GameWindowOnly && s.Games.Count > 0) capArgs.AddRange(new[] { "--window", string.Join(";", s.Games) });
             if (Launch("capture.exe", capArgs.ToArray()) == null)
             {
@@ -169,7 +171,13 @@ public sealed class Recorder
             ring = new ClipRing(s.BufferSeconds, s.BufferOnDisk ? Path.Combine(DiskRoot, $"{Environment.ProcessId}_{session}") : null);
             var (src, dst) = (ffmpeg.StandardOutput.BaseStream, ring);
             new Thread(() => dst.Fill(src)) { IsBackground = true, Name = "buffer" }.Start();
-            Log?.Invoke($"Buffer started: {s.Height}p {s.Fps} fps, {s.BitrateMbps} Mbps, {trackTitles.Count} audio track(s), " +
+            string rate = s.RateControl switch
+            {
+                RateControl.CQP => $"CQP {s.Cqp}",
+                RateControl.VBR => $"VBR {s.BitrateMbps}-{Math.Max(s.BitrateMbps, s.MaxBitrateMbps)} Mbps",
+                _ => $"{s.BitrateMbps} Mbps",
+            };
+            Log?.Invoke($"Buffer started: {s.Height}p {(s.Fps == 0 ? "game frame rate" : s.Fps + " fps")}, {rate}, {trackTitles.Count} audio track(s), " +
                         $"{s.BufferSeconds / 60.0:0.#} min in {(s.BufferOnDisk ? "temp files on disk" : "memory")}");
         }
     }

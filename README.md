@@ -1,6 +1,6 @@
 ﻿# Replay Buffer
 
-A free, no-nonsense replay recorder for Windows. It quietly keeps the last few minutes of your game and saves a clip when you press a key. No account, no overlay, no watermark, no upload, no paywall.
+**Made by [Jebula999](https://github.com/Jebula999).** A free, no-nonsense replay recorder for Windows. It quietly keeps the last few minutes of your game and saves a clip when you press a key. No account, no overlay, no watermark, no upload, no paywall.
 
 > [!IMPORTANT]
 > **This app was vibe coded.** It was written entirely by [Claude](https://claude.ai) (Anthropic's AI, through Claude Code), directed by a human who described what they wanted and tested the results. The human didn't write the code by hand. It works well on the machine it was built and tested on, but it hasn't had the review or long-term testing of a commercial recorder. Use it at your own risk, and please [open an issue](https://github.com/Jebula999/ReplayBuffer/issues) if something breaks.
@@ -12,7 +12,8 @@ A free, no-nonsense replay recorder for Windows. It quietly keeps the last few m
 - **Separate audio tracks**: game, Discord (or any other app) and your mic each get their own track for editing. An extra "All audio" mix track comes first, so normal video players play everything.
 - **Starts by itself**: buffers only while one of your games is running, or always if you prefer.
 - **Clips are sorted per game**: `Replays\Wardogs\Replay 2026-10-27 14-39-56.mp4`.
-- **720p / 1080p / 1440p** at **30 / 60 / 144 fps**, H.264, 5–100 Mbps, encoded on your graphics card.
+- **720p / 1080p / 1440p** at **30 / 60 / 144 fps**, or **Match game** to record at whatever frame rate the game is actually running. H.264, encoded on your graphics card.
+- **CBR, VBR or CQP rate control** (like OBS): fixed bitrate, a variable bitrate that drops in quiet scenes, or constant quality.
 - **Buffer in RAM (default) or on disk.**
 - **Doesn't touch your games**: no overlay, no hooks, nothing injected. AMD FSR, frame generation and driver features are unaffected.
 
@@ -103,13 +104,17 @@ Tips:
 
 | Setting | What it does |
 |---|---|
-| **Resolution / Frame rate** | Size and smoothness of saved clips. The game itself is unaffected. |
-| **Bitrate** | Quality vs. file size. 15–20 Mbps looks good at 1080p/1440p60; go higher for 144 fps or very fast games. |
+| **Resolution / Frame rate** | Size and smoothness of saved clips. The game itself is unaffected. **Match game** records every frame the game shows (up to your monitor's refresh rate), so a game running at 97 fps gives a 97 fps clip. |
+| **Rate control** | **CBR** (default): the same bitrate all the time; predictable file sizes. **VBR**: aims for the target bitrate, uses less when little moves and up to the max bitrate in busy scenes. **CQP**: the same quality all the time; quiet scenes are tiny, action is big. |
+| **Bitrate / Target bitrate** | CBR and VBR. Quality vs. file size. 15–20 Mbps looks good at 1080p/1440p60; go higher for 144 fps or very fast games. |
+| **Max bitrate** | VBR only. The ceiling in busy scenes. About 1.5–2× the target is a good start. |
+| **CQ level** | CQP only. Lower is better quality and bigger files: 18–23 suits most games, 14–16 is near lossless, 28+ is small. |
+| **Encoder preset** | Speed / Balanced / Quality. Quality spends a little more of the GPU's encoder time per frame (it doesn't use the GPU cores the game uses). |
 | **Record only the game window** | On: only the game is recorded while it runs. Off: the whole display is recorded. |
 | **Display** | Which monitor to record when no game window is being recorded. |
 | **Clip length** | How far back a saved clip goes (30 s – 30 min). |
 | **Keep the buffer in** | **Memory (RAM)**: nothing is written to your drive until you save (default). **Disk**: uses temp files instead of RAM, for long buffers on PCs with less memory. |
-| **Estimated size** | Roughly how big each clip will be, and how much RAM (or disk) the buffer uses. |
+| **Estimated size** | Roughly how big each clip will be, and how much RAM (or disk) the buffer uses. For VBR it shows the maximum; for CQP it's a rough guess, because the size depends on the game. |
 | **Save shortcut** | Click the box and press any key or combo (Num \*, F9, Ctrl + Shift + S...). It works while the game is focused. |
 | **Clips folder** | Where clips are saved (default `Videos\Replays`). Each game gets a subfolder. |
 | **Save sound** | Chime on save. A falling tone means the save failed (see the Activity log). |
@@ -123,6 +128,7 @@ Tips:
 - **Clip is black**: the game might use old-style *exclusive* fullscreen. Switch the game to **borderless / windowed fullscreen**, or turn off **Record only the game window**.
 - **Only hear the game in my clip**: your player is playing the first track only. Clips made since the "All audio" track was added play everything. Editors show every track.
 - **Dropped frames**: the Activity log reports "fps dropped". Lower the frame rate or resolution, or close other GPU-heavy apps. Clips always stay at the right speed: frames are dropped rather than slowed down.
+- **Editor shows odd frame rates or stutter with Match game clips**: Match game clips have a variable frame rate. Players handle that fine, but some editors (Premiere, older Vegas) prefer a fixed rate. Pick 60 or 144 fps if you edit in one of those, or let the editor convert the clip.
 - **Something else**: open **Activity log** (bottom of the window), copy it, and include it in an [issue](https://github.com/Jebula999/ReplayBuffer/issues).
 
 Settings and log live in `%APPDATA%\ReplayBuffer` (installed) or the `Data` folder (portable).
@@ -153,5 +159,5 @@ This builds everything and writes `release\ReplayBuffer-Setup-<ver>.exe` and `re
 
 ## Credits & licenses
 
-- Written by Claude (Anthropic) via Claude Code, directed and tested by [Jebula999](https://github.com/Jebula999).
+- Made by [Jebula999](https://github.com/Jebula999): designed, directed and tested by Jebula999, code written by Claude (Anthropic) via Claude Code.
 - Bundles [FFmpeg](https://ffmpeg.org) (GPLv3 build by [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)). See `THIRD-PARTY-NOTICES.txt`.

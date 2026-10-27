@@ -121,6 +121,7 @@
             <StackPanel Orientation="Horizontal" Margin="2,0,0,18">
                 <Image Source="app.ico" Width="28" Height="28" VerticalAlignment="Center" />
                 <TextBlock Text="Replay Buffer" FontSize="24" FontWeight="SemiBold" Margin="12,0,0,2" VerticalAlignment="Center" />
+                <TextBlock Text="by Jebula999" Style="{StaticResource RowDesc}" FontSize="13" Margin="10,6,0,0" VerticalAlignment="Center" />
             </StackPanel>
 
             <!-- status -->
@@ -170,18 +171,73 @@
                         <TextBlock Text="&#xE916;" Style="{StaticResource RowIcon}" />
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                             <TextBlock Text="Frame rate" Style="{StaticResource RowTitle}" />
+                            <TextBlock Text="Match game records every frame the game shows, up to your refresh rate" Style="{StaticResource RowDesc}" />
                         </StackPanel>
                         <ComboBox x:Name="FpsBox" Grid.Column="2" Style="{StaticResource Field}" />
                     </Grid>
                     <Border Style="{StaticResource Divider}" />
                     <Grid Style="{StaticResource Row}">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                        <TextBlock Text="&#xEC4A;" Style="{StaticResource RowIcon}" />
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock Text="Bitrate" Style="{StaticResource RowTitle}" />
-                            <TextBlock Text="Higher looks better in fast motion, but makes bigger files" Style="{StaticResource RowDesc}" />
+                        <TextBlock Text="&#xE9E9;" Style="{StaticResource RowIcon}" />
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,10,16,10">
+                            <TextBlock Text="Rate control" Style="{StaticResource RowTitle}" />
+                            <TextBlock x:Name="RateDesc" Style="{StaticResource RowDesc}" TextWrapping="Wrap" />
                         </StackPanel>
-                        <ComboBox x:Name="BitrateBox" Grid.Column="2" Style="{StaticResource Field}" />
+                        <ComboBox x:Name="RateBox" Grid.Column="2" Style="{StaticResource Field}">
+                            <ComboBoxItem Content="CBR (constant bitrate)" />
+                            <ComboBoxItem Content="VBR (variable bitrate)" />
+                            <ComboBoxItem Content="CQP (constant quality)" />
+                        </ComboBox>
+                    </Grid>
+                    <StackPanel x:Name="BitratePanel">
+                        <Border Style="{StaticResource Divider}" />
+                        <Grid Style="{StaticResource Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xEC4A;" Style="{StaticResource RowIcon}" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock x:Name="BitrateTitle" Text="Bitrate" Style="{StaticResource RowTitle}" />
+                                <TextBlock Text="Higher looks better in fast motion, but makes bigger files" Style="{StaticResource RowDesc}" />
+                            </StackPanel>
+                            <ComboBox x:Name="BitrateBox" Grid.Column="2" Style="{StaticResource Field}" />
+                        </Grid>
+                    </StackPanel>
+                    <StackPanel x:Name="MaxBitratePanel">
+                        <Border Style="{StaticResource Divider}" />
+                        <Grid Style="{StaticResource Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xEC4A;" Style="{StaticResource RowIcon}" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="Max bitrate" Style="{StaticResource RowTitle}" />
+                                <TextBlock Text="The most it may use in busy scenes" Style="{StaticResource RowDesc}" />
+                            </StackPanel>
+                            <ComboBox x:Name="MaxBitrateBox" Grid.Column="2" Style="{StaticResource Field}" />
+                        </Grid>
+                    </StackPanel>
+                    <StackPanel x:Name="CqpPanel">
+                        <Border Style="{StaticResource Divider}" />
+                        <Grid Style="{StaticResource Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xE8B9;" Style="{StaticResource RowIcon}" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="CQ level" Style="{StaticResource RowTitle}" />
+                                <TextBlock Text="Lower is better quality and bigger files. 18-23 suits most games." Style="{StaticResource RowDesc}" />
+                            </StackPanel>
+                            <ComboBox x:Name="CqpBox" Grid.Column="2" Style="{StaticResource Field}" />
+                        </Grid>
+                    </StackPanel>
+                    <Border Style="{StaticResource Divider}" />
+                    <Grid Style="{StaticResource Row}">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBlock Text="&#xEC48;" Style="{StaticResource RowIcon}" />
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock Text="Encoder preset" Style="{StaticResource RowTitle}" />
+                            <TextBlock Text="Quality spends a little more GPU encoder time per frame" Style="{StaticResource RowDesc}" />
+                        </StackPanel>
+                        <ComboBox x:Name="PresetBox" Grid.Column="2" Style="{StaticResource Field}">
+                            <ComboBoxItem Content="Speed" />
+                            <ComboBoxItem Content="Balanced (default)" />
+                            <ComboBoxItem Content="Quality" />
+                        </ComboBox>
                     </Grid>
                     <Border Style="{StaticResource Divider}" />
                     <Grid Style="{StaticResource Row}">
@@ -410,6 +466,16 @@
                         <TextBox x:Name="LogBox" Height="200" IsReadOnly="True" FontFamily="Cascadia Mono, Consolas" FontSize="11"
                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" Margin="0,8,0,8" />
                     </Expander>
+                    <Border Style="{StaticResource Divider}" />
+                    <Grid Style="{StaticResource Row}">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBlock Text="&#xE946;" Style="{StaticResource RowIcon}" />
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,10,16,10">
+                            <TextBlock x:Name="AboutTitle" Text="Replay Buffer" Style="{StaticResource RowTitle}" />
+                            <TextBlock Text="Made by Jebula999 · vibe coded with Claude" Style="{StaticResource RowDesc}" />
+                        </StackPanel>
+                        <Button Grid.Column="2" Content="GitHub" MinWidth="80" VerticalAlignment="Center" Click="GitHub_Click" />
+                    </Grid>
                 </StackPanel>
             </Border>
         </StackPanel>
