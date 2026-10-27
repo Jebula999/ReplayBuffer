@@ -295,6 +295,7 @@
                         <TextBlock Text="&#xE9D9;" Style="{StaticResource RowIcon}" />
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,10,16,10">
                             <TextBlock Text="Estimated size" Style="{StaticResource RowTitle}" />
+                            <TextBlock x:Name="QualityText" FontWeight="SemiBold" FontSize="13" TextWrapping="Wrap" Margin="0,2,0,2" />
                             <TextBlock x:Name="EstimateDetail" Style="{StaticResource RowDesc}" />
                         </StackPanel>
                         <StackPanel Grid.Column="2" VerticalAlignment="Center" Width="200">

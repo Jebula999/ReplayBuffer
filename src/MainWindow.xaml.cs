@@ -161,8 +161,31 @@ public partial class MainWindow : Window
         {
             RateControl.CQP => $"{len} at CQ {S.Cqp} {with}. Depends on the game: busy scenes are bigger, still ones much smaller.",
             RateControl.VBR => $"{len} at {S.BitrateMbps}-{Math.Max(S.BitrateMbps, S.MaxBitrateMbps)} Mbps {with}. Usually less than the maximum.",
-            _ => $"{len} at {S.BitrateMbps} Mbps {with}. Resolution and frame rate don't change it.",
+            _ => $"{len} at {S.BitrateMbps} Mbps {with}. Resolution and frame rate change quality, not size.",
         };
+        RefreshQuality();
+    }
+
+    // CBR/VBR: bits per pixel at the target bitrate. CQP: the CQ level itself.
+    void RefreshQuality()
+    {
+        int fps = S.Fps == 0 ? 60 : S.Fps;
+        int level;  // 3 great .. 0 low
+        if (S.RateControl == RateControl.CQP)
+            level = S.Cqp <= 18 ? 3 : S.Cqp <= 23 ? 2 : S.Cqp <= 28 ? 1 : 0;
+        else
+        {
+            double bpp = S.BitrateMbps * 1e6 / (S.Height * S.Height * 16 / 9.0 * fps);
+            level = bpp >= 0.12 ? 3 : bpp >= 0.08 ? 2 : bpp >= 0.05 ? 1 : 0;
+        }
+        string[] names = { "Low", "Fair", "Good", "Great" };
+        Color[] colors = { Color.FromRgb(232, 72, 85), Color.FromRgb(230, 160, 40), Color.FromRgb(108, 190, 80), Color.FromRgb(60, 180, 120) };
+        string rate = S.Fps == 0 ? "60 fps (match game varies)" : $"{S.Fps} fps";
+        QualityText.Text = S.RateControl == RateControl.CQP
+            ? $"Quality: {names[level]} (CQ {S.Cqp})"
+            : $"Quality: {names[level]} for {S.Height}p at {rate}";
+        if (level < 2 && S.RateControl != RateControl.CQP) EstimateDetail.Text += " Raise the bitrate for busy games.";
+        QualityText.Foreground = new SolidColorBrush(colors[level]);
     }
 
     static string Size(double bytes) => bytes >= 1e9 ? $"{bytes / 1e9:0.0} GB" : $"{bytes / 1e6:0} MB";
