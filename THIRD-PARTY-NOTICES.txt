@@ -1,0 +1,7 @@
+Replay Buffer includes FFmpeg (ffmpeg.exe), used only to package the recorded video and audio into files.
+
+FFmpeg is licensed under the GNU General Public License version 3 (this build includes GPL components).
+Full license text: ffmpeg-LICENSE.txt
+Build: "release essentials" by Gyan Doshi - https://www.gyan.dev/ffmpeg/builds/
+Source code: https://ffmpeg.org/download.html and https://github.com/FFmpeg/FFmpeg
+FFmpeg is a trademark of Fabrice Bellard.

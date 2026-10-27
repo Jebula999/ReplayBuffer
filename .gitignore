@@ -1,0 +1,9 @@
+# build output (ffmpeg.exe is downloaded by build.bat; release files go on the GitHub Releases page)
+dist/
+release/
+build/
+src/bin/
+src/obj/
+*.obj
+*.pdb
+.vs/
